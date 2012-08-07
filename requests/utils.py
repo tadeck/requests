@@ -12,14 +12,15 @@ that are also useful for external consumption.
 import cgi
 import codecs
 import os
-import random
+import platform
 import re
+import sys
 import zlib
 from netrc import netrc, NetrcParseError
 
+from . import __version__
 from .compat import parse_http_list as _parse_list_header
-from .compat import quote, is_py2, urlparse
-from .compat import basestring, bytes, str
+from .compat import quote, urlparse, basestring, bytes, str
 from .cookies import RequestsCookieJar, cookiejar_from_dict
 
 _hush_pyflakes = (RequestsCookieJar,)
@@ -27,8 +28,8 @@ _hush_pyflakes = (RequestsCookieJar,)
 CERTIFI_BUNDLE_PATH = None
 try:
     # see if requests's own CA certificate bundle is installed
-    import certifi
-    CERTIFI_BUNDLE_PATH = certifi.where()
+    from . import certs
+    CERTIFI_BUNDLE_PATH = certs.where()
 except ImportError:
     pass
 
@@ -42,6 +43,10 @@ POSSIBLE_CA_BUNDLE_PATHS = [
         '/etc/ssl/certs/ca-certificates.crt',
         # FreeBSD (provided by the ca_root_nss package):
         '/usr/local/share/certs/ca-root-nss.crt',
+        # openSUSE (provided by the ca-certificates package), the 'certs' directory is the
+        # preferred way but may not be supported by the SSL module, thus it has 'ca-bundle.pem'
+        # as a fallback (which is generated from pem files in the 'certs' directory):
+        '/etc/ssl/ca-bundle.pem',
 ]
 
 def get_os_ca_bundle_path():
@@ -96,7 +101,7 @@ def get_netrc_auth(url):
             pass
 
     # AppEngine hackiness.
-    except AttributeError:
+    except (ImportError, AttributeError):
         pass
 
 
@@ -246,15 +251,6 @@ def header_expand(headers):
         del collector[-1]
 
     return ''.join(collector)
-
-
-def randombytes(n):
-    """Return n random bytes."""
-    if is_py2:
-        L = [chr(random.randrange(0, 256)) for i in range(n)]
-    else:
-        L = [chr(random.randrange(0, 256)).encode('utf-8') for i in range(n)]
-    return b"".join(L)
 
 
 def dict_from_cookiejar(cj):
@@ -419,21 +415,23 @@ UNRESERVED_SET = frozenset(
 
 def unquote_unreserved(uri):
     """Un-escape any percent-escape sequences in a URI that are unreserved
-    characters.
-    This leaves all reserved, illegal and non-ASCII bytes encoded.
+    characters. This leaves all reserved, illegal and non-ASCII bytes encoded.
     """
-    parts = uri.split('%')
-    for i in range(1, len(parts)):
-        h = parts[i][0:2]
-        if len(h) == 2:
-            c = chr(int(h, 16))
-            if c in UNRESERVED_SET:
-                parts[i] = c + parts[i][2:]
+    try:
+        parts = uri.split('%')
+        for i in range(1, len(parts)):
+            h = parts[i][0:2]
+            if len(h) == 2 and h.isalnum():
+                c = chr(int(h, 16))
+                if c in UNRESERVED_SET:
+                    parts[i] = c + parts[i][2:]
+                else:
+                    parts[i] = '%' + parts[i]
             else:
                 parts[i] = '%' + parts[i]
-        else:
-            parts[i] = '%' + parts[i]
-    return ''.join(parts)
+        return ''.join(parts)
+    except ValueError:
+        return uri
 
 
 def requote_uri(uri):
@@ -462,3 +460,31 @@ def get_environ_proxies():
     get_proxy = lambda k: os.environ.get(k) or os.environ.get(k.upper())
     proxies = [(key, get_proxy(key + '_proxy')) for key in proxy_keys]
     return dict([(key, val) for (key, val) in proxies if val])
+
+
+def default_user_agent():
+    """Return a string representing the default user agent."""
+    _implementation = platform.python_implementation()
+
+    if _implementation == 'CPython':
+        _implementation_version = platform.python_version()
+    elif _implementation == 'PyPy':
+        _implementation_version = '%s.%s.%s' % (
+                                                sys.pypy_version_info.major,
+                                                sys.pypy_version_info.minor,
+                                                sys.pypy_version_info.micro
+                                            )
+        if sys.pypy_version_info.releaselevel != 'final':
+            _implementation_version = ''.join([_implementation_version, sys.pypy_version_info.releaselevel])
+    elif _implementation == 'Jython':
+        _implementation_version = platform.python_version()  # Complete Guess
+    elif _implementation == 'IronPython':
+        _implementation_version = platform.python_version()  # Complete Guess
+    else:
+        _implementation_version = 'Unknown'
+
+    return " ".join([
+            'python-requests/%s' % __version__,
+            '%s/%s' % (_implementation, _implementation_version),
+            '%s/%s' % (platform.system(), platform.release()),
+        ])

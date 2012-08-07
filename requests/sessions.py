@@ -9,6 +9,7 @@ requests (cookies, auth, proxies).
 
 """
 
+from copy import deepcopy
 from .compat import cookielib
 from .cookies import cookiejar_from_dict, remove_cookie_by_name
 from .defaults import defaults
@@ -65,7 +66,7 @@ class Session(object):
         hooks=None,
         params=None,
         config=None,
-        prefetch=False,
+        prefetch=True,
         verify=True,
         cert=None):
 
@@ -81,7 +82,7 @@ class Session(object):
         self.cert = cert
 
         for (k, v) in list(defaults.items()):
-            self.config.setdefault(k, v)
+            self.config.setdefault(k, deepcopy(v))
 
         self.init_poolmanager()
 
@@ -104,7 +105,15 @@ class Session(object):
         return self
 
     def __exit__(self, *args):
-        pass
+        self.close()
+
+    def close(self):
+        """Dispose of any internal state.
+
+        Currently, this just closes the PoolManager, which closes pooled
+        connections.
+        """
+        self.poolmanager.clear()
 
     def request(self, method, url,
         params=None,
@@ -119,7 +128,7 @@ class Session(object):
         hooks=None,
         return_response=True,
         config=None,
-        prefetch=False,
+        prefetch=None,
         verify=None,
         cert=None):
 
@@ -138,8 +147,8 @@ class Session(object):
         :param allow_redirects: (optional) Boolean. Set to True by default.
         :param proxies: (optional) Dictionary mapping protocol to the URL of the proxy.
         :param return_response: (optional) If False, an un-sent Request object will returned.
-        :param config: (optional) A configuration dictionary.
-        :param prefetch: (optional) if ``True``, the response content will be immediately downloaded.
+        :param config: (optional) A configuration dictionary. See ``request.defaults`` for allowed keys and their default values.
+        :param prefetch: (optional) whether to immediately download the response content. Defaults to ``True``.
         :param verify: (optional) if ``True``, the SSL cert will be verified. A CA_BUNDLE path can also be provided.
         :param cert: (optional) if String, path to ssl client cert file (.pem). If Tuple, ('cert', 'key') pair.
         """
@@ -152,7 +161,7 @@ class Session(object):
         headers = {} if headers is None else headers
         params = {} if params is None else params
         hooks = {} if hooks is None else hooks
-        prefetch = self.prefetch or prefetch
+        prefetch = prefetch if prefetch is not None else self.prefetch
 
         # use session's hooks as defaults
         for key, cb in list(self.hooks.items()):
@@ -227,12 +236,6 @@ class Session(object):
 
         # Send the HTTP Request.
         r.send(prefetch=prefetch)
-
-        # Send any cookies back up the to the session.
-        # (in safe mode, cookies may be None if the request didn't succeed)
-        if r.response.cookies is not None:
-            for cookie in r.response.cookies:
-                self.cookies.set_cookie(cookie)
 
         # Return the response.
         return r.response

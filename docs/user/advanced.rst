@@ -45,6 +45,39 @@ Any dictionaries that you pass to a request method will be merged with the sessi
 
 All values that are contained within a session are directly available to you. See the :ref:`Session API Docs <sessionapi>` to learn more.
 
+Request and Response Objects
+----------------------------
+
+Whenever a call is made to requests.*() you are doing two major things. First,
+you are constructing a ``Request`` object which will be sent of to a server
+to request or query some resource. Second, a ``Response`` object is generated
+once ``requests`` gets a response back from the server. The response object
+contains all of the information returned by the server and also contains the
+``Request`` object you created originally. Here is a simple request to get some
+very important information from Wikipedia's servers::
+
+    >>> response = requests.get('http://en.wikipedia.org/wiki/Monty_Python')
+
+If we want to access the headers the server sent back to us, we do this::
+
+    >>> response.headers
+    {'content-length': '56170', 'x-content-type-options': 'nosniff', 'x-cache':
+    'HIT from cp1006.eqiad.wmnet, MISS from cp1010.eqiad.wmnet', 'content-encoding':
+    'gzip', 'age': '3080', 'content-language': 'en', 'vary': 'Accept-Encoding,Cookie',
+    'server': 'Apache', 'last-modified': 'Wed, 13 Jun 2012 01:33:50 GMT',
+    'connection': 'close', 'cache-control': 'private, s-maxage=0, max-age=0,
+    must-revalidate', 'date': 'Thu, 14 Jun 2012 12:59:39 GMT', 'content-type':
+    'text/html; charset=UTF-8', 'x-cache-lookup': 'HIT from cp1006.eqiad.wmnet:3128,
+    MISS from cp1010.eqiad.wmnet:80'}
+
+However, if we want to get the headers we sent the server, we simply access the
+request, and then the request's headers::
+
+    >>> response.request.headers
+    {'Accept-Encoding': 'identity, deflate, compress, gzip',
+    'Accept': '*/*', 'User-Agent': 'python-requests/0.13.1'}
+
+
 SSL Cert Verification
 ---------------------
 
@@ -59,6 +92,23 @@ I don't have SSL setup on this domain, so it fails. Excellent. Github does thoug
     <Response [200]>
 
 You can also pass ``verify`` the path to a CA_BUNDLE file for private certs. You can also set the ``REQUESTS_CA_BUNDLE`` environment variable.
+
+Requests can also ignore verifying the SSL certficate if you set ``verify`` to False. ::
+
+    >>> requests.get('https://kennethreitz.com', verify=False)
+    <Response [200]>
+
+By default, ``verify`` is set to True. Option ``verify`` only applies to host certs.
+
+You can also specify the local cert file either as a path or key value pair::
+
+    >>> requests.get('https://kennethreitz.com', cert=('/path/server.crt', '/path/key'))
+    <Response [200]>
+
+If you specify a wrong path or an invalid cert::
+
+    >>> requests.get('https://kennethreitz.com', cert='/wrong_path/server.pem')
+    SSLError: [Errno 336265225] _ssl.c:347: error:140B0009:SSL routines:SSL_CTX_use_PrivateKey_file:PEM lib
 
 
 Body Content Workflow
@@ -106,43 +156,8 @@ If you'd like to disable keep-alive, you can simply set the ``keep_alive`` confi
 Asynchronous Requests
 ----------------------
 
-Requests has first-class support for concurrent requests, powered by gevent.
-This allows you to send a bunch of HTTP requests at the same time.
 
-First, let's import the async module. Heads up — if you don't have
-`gevent <http://pypi.python.org/pypi/gevent>`_ this will fail::
-
-    from requests import async
-
-The ``async`` module has the exact same api as ``requests``, except it
-doesn't send the request immediately. Instead, it returns the ``Request``
-object.
-
-We can build a list of ``Request`` objects easily::
-
-    urls = [
-        'http://python-requests.org',
-        'http://httpbin.org',
-        'http://python-guide.org',
-        'http://kennethreitz.com'
-    ]
-
-    rs = [async.get(u) for u in urls]
-
-Now we have a list of ``Request`` objects, ready to be sent. We could send them
-one at a time with ``Request.send()``, but that would take a while.  Instead,
-we'll send them all at the same time with ``async.map()``.  Using ``async.map()``
-will also guarantee execution of the ``response`` hook, described below. ::
-
-    >>> responses = async.map(rs)
-    >>> responses
-    [<Response [200]>, <Response [200]>, <Response [200]>, <Response [200]>]
-
-.. admonition:: Throttling
-
-    The ``map`` function also takes a ``size`` parameter, that specifies the number of connections to make at a time::
-
-        async.map(rs, size=5)
+``requests.async`` has been removed from requests and is now its own repository named `GRequests <https://github.com/kennethreitz/grequests>`_.
 
 
 Event Hooks
@@ -258,7 +273,6 @@ Then, we can make a request using our Pizza Auth::
     >>> requests.get('http://pizzabin.org/admin', auth=PizzaAuth('kenneth'))
     <Response [200]>
 
-
 Streaming Requests
 ------------------
 
@@ -293,6 +307,7 @@ To do so, just configure Requests with a stream to write to::
     2011-08-17T03:04:23.380175   GET   http://httpbin.org/headers
     <Response [200]>
 
+
 Proxies
 -------
 
@@ -304,8 +319,8 @@ If you need to use a proxy, you can configure individual requests with the
     import requests
 
     proxies = {
-      "http": "10.10.1.10:3128"
-      "https": "10.10.1.10:1080"
+      "http": "10.10.1.10:3128",
+      "https": "10.10.1.10:1080",
     }
 
     requests.get("http://example.org", proxies=proxies)
@@ -319,3 +334,168 @@ You can also configure proxies by environment variables ``HTTP_PROXY`` and ``HTT
     $ python
     >>> import requests
     >>> requests.get("http://example.org")
+
+To use HTTP Basic Auth with your proxy, use the `http://user:password@host/` syntax:
+
+::
+
+    proxies = {
+        "http": "http://user:pass@10.10.1.10:3128/",
+    }
+
+
+HTTP Verbs
+----------
+
+Requests provides access to almost the full range of HTTP verbs: GET, OPTIONS,
+HEAD, POST, PUT, PATCH and DELETE. The following provides detailed examples of
+using these various verbs in Requests, using the GitHub API.
+
+We will begin with the verb most commonly used: GET. HTTP GET is an idempotent
+method that returns a resource from a given URL. As a result, it is the verb
+you ought to use when attempting to retrieve data from a web location. An
+example usage would be attempting to get information about a specific commit
+from GitHub. Suppose we wanted commit ``a050faf`` on Requests. We would get it
+like so::
+
+    >>> import requests
+    >>> r = requests.get('https://api.github.com/repos/kennethreitz/requests/git/commits/a050faf084662f3a352dd1a941f2c7c9f886d4ad')
+
+We should confirm that GitHub responded correctly. If it has, we want to work
+out what type of content it is. Do this like so::
+
+    >>> if (r.status_code == requests.codes.ok):
+    ...     print r.headers['content-type']
+    ...
+    application/json; charset=utf-8
+
+So, GitHub returns JSON. That's great, we can use the JSON module to turn it
+into Python objects. Because GitHub returned UTF-8, we should use the
+``r.text`` method, not the ``r.content`` method. ``r.content`` returns a
+bytestring, while ``r.text`` returns a Unicode-encoded string. I have no plans
+to perform byte-manipulation on this response, so I want any Unicode code
+points encoded.::
+
+    >>> import json
+    >>> commit_data = json.loads(r.text)
+    >>> print commit_data.keys()
+    [u'committer', u'author', u'url', u'tree', u'sha', u'parents', u'message']
+    >>> print commit_data[u'committer']
+    {u'date': u'2012-05-10T11:10:50-07:00', u'email': u'me@kennethreitz.com', u'name': u'Kenneth Reitz'}
+    >>> print commit_data[u'message']
+    makin' history
+
+So far, so simple. Well, let's investigate the GitHub API a little bit. Now,
+we could look at the documentation, but we might have a little more fun if we
+use Requests instead. We can take advantage of the Requests OPTIONS verb to
+see what kinds of HTTP methods are supported on the url we just used.::
+
+    >>> verbs = requests.options(r.url)
+    >>> verbs.status_code
+    500
+
+Uh, what? That's unhelpful! Turns out GitHub, like many API providers, don't
+actually implement the OPTIONS method. This is an annoying oversight, but it's
+OK, we can just use the boring documentation. If GitHub had correctly
+implemented OPTIONS, however, they should return the allowed methods in the
+headers, e.g.::
+
+    >>> verbs = requests.options('http://a-good-website.com/api/cats')
+    >>> print verbs.headers['allow']
+    GET,HEAD,POST,OPTIONS
+
+Turning to the documentation, we see that the only other method allowed for
+commits is POST, which creates a new commit. As we're using the Requests repo,
+we should probably avoid making ham-handed POSTS to it. Instead, let's play
+with the Issues feature of GitHub.
+
+This documentation was added in response to Issue #482. Given that this issue
+already exists, we will use it as an example. Let's start by getting it.::
+
+    >>> r = requests.get('https://api.github.com/repos/kennethreitz/requests/issues/482')
+    >>> r.status_code
+    200
+    >>> issue = json.loads(r.text)
+    >>> print issue[u'title']
+    Feature any http verb in docs
+    >>> print issue[u'comments']
+    3
+
+Cool, we have three comments. Let's take a look at the last of them.::
+
+    >>> r = requests.get(r.url + u'/comments')
+    >>> r.status_code
+    200
+    >>> comments = json.loads(r.text)
+    >>> print comments[0].keys()
+    [u'body', u'url', u'created_at', u'updated_at', u'user', u'id']
+    >>> print comments[2][u'body']
+    Probably in the "advanced" section
+
+Well, that seems like a silly place. Let's post a comment telling the poster
+that he's silly. Who is the poster, anyway?::
+
+    >>> print comments[2][u'user'][u'login']
+    kennethreitz
+
+OK, so let's tell this Kenneth guy that we think this example should go in the
+quickstart guide instead. According to the GitHub API doc, the way to do this
+is to POST to the thread. Let's do it.::
+
+    >>> body = json.dumps({u"body": u"Sounds great! I'll get right on it!"})
+    >>> url = u"https://api.github.com/repos/kennethreitz/requests/issues/482/comments"
+    >>> r = requests.post(url=url, data=body)
+    >>> r.status_code
+    404
+
+Huh, that's weird. We probably need to authenticate. That'll be a pain, right?
+Wrong. Requests makes it easy to use many forms of authentication, including
+the very common Basic Auth.::
+
+    >>> from requests.auth import HTTPBasicAuth
+    >>> auth = HTTPBasicAuth('fake@example.com', 'not_a_real_password')
+    >>> r = requests.post(url=url, data=body, auth=auth)
+    >>> r.status_code
+    201
+    >>> content = json.loads(r.text)
+    >>> print content[u'body']
+    Sounds great! I'll get right on it.
+
+Brilliant. Oh, wait, no! I meant to add that it would take me a while, because
+I had to go feed my cat. If only I could edit this comment! Happily, GitHub
+allows us to use another HTTP verb, PATCH, to edit this comment. Let's do
+that.::
+
+    >>> print content[u"id"]
+    5804413
+    >>> body = json.dumps({u"body": u"Sounds great! I'll get right on it once I feed my cat."})
+    >>> url = u"https://api.github.com/repos/kennethreitz/requests/issues/comments/5804413"
+    >>> r = requests.patch(url=url, data=body, auth=auth)
+    >>> r.status_code
+    200
+
+Excellent. Now, just to torture this Kenneth guy, I've decided to let him
+sweat and not tell him that I'm working on this. That means I want to delete
+this comment. GitHub lets us delete comments using the incredibly aptly named
+DELETE method. Let's get rid of it.::
+
+    >>> r = requests.delete(url=url, auth=auth)
+    >>> r.status_code
+    204
+    >>> r.headers['status']
+    '204 No Content'
+
+Excellent. All gone. The last thing I want to know is how much of my ratelimit
+I've used. Let's find out. GitHub sends that information in the headers, so
+rather than download the whole page I'll send a HEAD request to get the
+headers.::
+
+    >>> r = requests.head(url=url, auth=auth)
+    >>> print r.headers
+    // ...snip... //
+    'x-ratelimit-remaining': '4995'
+    'x-ratelimit-limit': '5000'
+    // ...snip... //
+
+Excellent. Time to write a Python program that abuses the GitHub API in all
+kinds of exciting ways, 4995 more times.

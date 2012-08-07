@@ -7,22 +7,30 @@ requests.auth
 This module contains the authentication handlers for Requests.
 """
 
+import os
+import re
 import time
 import hashlib
+import logging
 
 from base64 import b64encode
 
 from .compat import urlparse, str
-from .utils import randombytes, parse_dict_header
+from .utils import parse_dict_header
 
 try:
-    from oauthlib.oauth1.rfc5849 import (Client, SIGNATURE_HMAC, SIGNATURE_TYPE_AUTH_HEADER)
-    from oauthlib.common import extract_params
-    # hush pyflakes:
-    SIGNATURE_HMAC; SIGNATURE_TYPE_AUTH_HEADER
+    from ._oauth import (Client, SIGNATURE_HMAC, SIGNATURE_TYPE_AUTH_HEADER, extract_params)
+
 except (ImportError, SyntaxError):
     SIGNATURE_HMAC = None
     SIGNATURE_TYPE_AUTH_HEADER = None
+
+try:
+    import kerberos as k
+except ImportError as exc:
+    k = None
+
+log = logging.getLogger(__name__)
 
 CONTENT_TYPE_FORM_URLENCODED = 'application/x-www-form-urlencoded'
 
@@ -60,13 +68,54 @@ class OAuth1(AuthBase):
             signature_type, rsa_key, verifier)
 
     def __call__(self, r):
+        """Add OAuth parameters to the request.
+
+        Parameters may be included from the body if the content-type is
+        urlencoded, if no content type is set an educated guess is made.
+        """
         contenttype = r.headers.get('Content-Type', None)
+        # extract_params will not give params unless the body is a properly
+        # formatted string, a dictionary or a list of 2-tuples.
         decoded_body = extract_params(r.data)
         if contenttype == None and decoded_body != None:
-            r.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            # extract_params can only check the present r.data and does not know
+            # of r.files, thus an extra check is performed. We know that
+            # if files are present the request will not have
+            # Content-type: x-www-form-urlencoded. We guess it will have
+            # a mimetype of multipart/form-encoded and if this is not the case
+            # we assume the correct header will be set later.
+            if r.files:
+                # Omit body data in the signing and since it will always
+                # be empty (cant add paras to body if multipart) and we wish
+                # to preserve body.
+                r.headers['Content-Type'] = 'multipart/form-encoded'
+                r.url, r.headers, _ = self.client.sign(
+                    unicode(r.full_url), unicode(r.method), None, r.headers)
+            else:
+                # Normal signing
+                r.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                r.url, r.headers, r.data = self.client.sign(
+                    unicode(r.full_url), unicode(r.method), r.data, r.headers)
 
-        r.url, r.headers, r.data = self.client.sign(
-            unicode(r.url), unicode(r.method), r.data, r.headers)
+            # Both flows add params to the URL by using r.full_url,
+            # so this prevents adding it again later
+            r.params = {}
+
+            # Having the authorization header, key or value, in unicode will
+            # result in UnicodeDecodeErrors when the request is concatenated
+            # by httplib. This can easily be seen when attaching files.
+            # Note that simply encoding the value is not enough since Python
+            # saves the type of first key set. Thus we remove and re-add.
+            # >>> d = {u'a':u'foo'}
+            # >>> d['a'] = 'foo'
+            # >>> d
+            # { u'a' : 'foo' }
+            u_header = unicode('Authorization')
+            if u_header in r.headers:
+                auth_header = r.headers[u_header].encode('utf-8')
+                del r.headers[u_header]
+                r.headers['Authorization'] = auth_header
+
         return r
 
 
@@ -97,11 +146,11 @@ class HTTPDigestAuth(AuthBase):
     def handle_401(self, r):
         """Takes the given response and tries digest-auth, if needed."""
 
-        r.request.deregister_hook('response', self.handle_401)
+        num_401_calls = r.request.hooks['response'].count(self.handle_401)
 
         s_auth = r.headers.get('www-authenticate', '')
 
-        if 'digest' in s_auth.lower():
+        if 'digest' in s_auth.lower() and num_401_calls < 2:
 
             last_nonce = ''
             nonce_count = 0
@@ -155,7 +204,7 @@ class HTTPDigestAuth(AuthBase):
                 s = str(nonce_count).encode('utf-8')
                 s += nonce.encode('utf-8')
                 s += time.ctime().encode('utf-8')
-                s += randombytes(8)
+                s += os.urandom(8)
 
                 cnonce = (hashlib.sha1(s).hexdigest()[:16])
                 noncebit = "%s:%s:%s:%s:%s" % (nonce, ncvalue, cnonce, qop, hash_utf8(A2))
@@ -188,4 +237,125 @@ class HTTPDigestAuth(AuthBase):
 
     def __call__(self, r):
         r.register_hook('response', self.handle_401)
+        return r
+
+def _negotiate_value(r):
+    """Extracts the gssapi authentication token from the appropriate header"""
+
+    authreq = r.headers.get('www-authenticate', None)
+
+    if authreq:
+        rx = re.compile('(?:.*,)*\s*Negotiate\s*([^,]*),?', re.I)
+        mo = rx.search(authreq)
+        if mo:
+            return mo.group(1)
+
+    return None
+
+class HTTPKerberosAuth(AuthBase):
+    """Attaches HTTP GSSAPI/Kerberos Authentication to the given Request object."""
+    def __init__(self, require_mutual_auth=True):
+        if k is None:
+            raise Exception("Kerberos libraries unavailable")
+        self.context = None
+        self.require_mutual_auth = require_mutual_auth
+
+    def generate_request_header(self, r):
+        """Generates the gssapi authentication token with kerberos"""
+
+        host = urlparse(r.url).netloc
+        tail, _, head = host.rpartition(':')
+        domain = tail if tail else head
+
+        result, self.context = k.authGSSClientInit("HTTP@%s" % domain)
+
+        if result < 1:
+            raise Exception("authGSSClientInit failed")
+
+        result = k.authGSSClientStep(self.context, _negotiate_value(r))
+
+        if result < 0:
+            raise Exception("authGSSClientStep failed")
+
+        response = k.authGSSClientResponse(self.context)
+
+        return "Negotiate %s" % response
+
+    def authenticate_user(self, r):
+        """Handles user authentication with gssapi/kerberos"""
+
+        auth_header = self.generate_request_header(r)
+        log.debug("authenticate_user(): Authorization header: %s" % auth_header)
+        r.request.headers['Authorization'] = auth_header
+        r.request.send(anyway=True)
+        _r = r.request.response
+        _r.history.append(r)
+        log.debug("authenticate_user(): returning %s" % _r)
+        return _r
+
+    def handle_401(self, r):
+        """Handles 401's, attempts to use gssapi/kerberos authentication"""
+
+        log.debug("handle_401(): Handling: 401")
+        if _negotiate_value(r) is not None:
+            _r = self.authenticate_user(r)
+            log.debug("handle_401(): returning %s" % _r)
+            return _r
+        else:
+            log.debug("handle_401(): Kerberos is not supported")
+            log.debug("handle_401(): returning %s" % r)
+            return r
+
+    def handle_other(self, r):
+        """Handles all responses with the exception of 401s.
+
+        This is necessary so that we can authenticate responses if requested"""
+
+        log.debug("handle_other(): Handling: %d" % r.status_code)
+        self.deregister(r)
+        if self.require_mutual_auth:
+            if _negotiate_value(r) is not None:
+                log.debug("handle_other(): Authenticating the server")
+                _r = self.authenticate_server(r)
+                log.debug("handle_other(): returning %s" % _r)
+                return _r
+            else:
+                log.error("handle_other(): Mutual authentication failed")
+                raise Exception("Mutual authentication failed")
+        else:
+            log.debug("handle_other(): returning %s" % r)
+            return r
+
+    def authenticate_server(self, r):
+        """Uses GSSAPI to authenticate the server"""
+
+        log.debug("authenticate_server(): Authenticate header: %s" % _negotiate_value(r))
+        result = k.authGSSClientStep(self.context, _negotiate_value(r))
+        if  result < 1:
+            raise Exception("authGSSClientStep failed")
+        _r = r.request.response
+        log.debug("authenticate_server(): returning %s" % _r)
+        return _r
+
+    def handle_response(self, r):
+        """Takes the given response and tries kerberos-auth, as needed."""
+
+        if r.status_code == 401:
+            _r = self.handle_401(r)
+            log.debug("handle_response returning %s" % _r)
+            return _r
+        else:
+            _r = self.handle_other(r)
+            log.debug("handle_response returning %s" % _r)
+            return _r
+
+        log.debug("handle_response returning %s" % r)
+        return r
+
+    def deregister(self, r):
+        """Deregisters the response handler"""
+        r.request.deregister_hook('response', self.handle_response)
+
+    def __call__(self, r):
+        r.register_hook('response', self.handle_response)
         return r

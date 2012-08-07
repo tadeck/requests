@@ -3,14 +3,70 @@
 History
 -------
 
+0.13.6 (2012-08-06)
++++++++++++++++++++
+
+- Long awaited fix for hanging connections!
+
+0.13.5 (2012-07-27)
++++++++++++++++++++
+
+- Packaging fix
+
+0.13.4 (2012-07-27)
++++++++++++++++++++
+
+- GSSAPI/Kerberos authentication!
+- App Engine 2.7 Fixes!
+- Fix leaking connections (from urllib3 update)
+- OAuthlib path hack fix
+- OAuthlib URL parameters fix.
+
+0.13.3 (2012-07-12)
++++++++++++++++++++
+
+- Use simplejson if available.
+- Do not hide SSLErrors behind Timeouts.
+- Fixed param handling with urls containing fragments.
+- Significantly improved information in User Agent.
+- client certificates are ignored when verify=False
+
+0.13.2 (2012-06-28)
++++++++++++++++++++
+
+- Zero dependencies (once again)!
+- New: Response.reason
+- Sign querystring parameters in OAuth 1.0
+- Client certificates no longer ignored when verify=False
+- Add openSUSE certificate support
+
+0.13.1 (2012-06-07)
++++++++++++++++++++
+
+- Allow passing a file or file-like object as data.
+- Allow hooks to return responses that indicate errors.
+- Fix Response.text and Response.json for body-less responses.
+
+0.13.0 (2012-05-29)
++++++++++++++++++++
+
+- Removal of Requests.async in favor of `grequests <https://github.com/kennethreitz/grequests>`_
+- Allow disabling of cookie persistiance.
+- New implimentation of safe_mode
+- cookies.get now supports default argument
+- Session cookies not saved when Session.request is called with return_response=False
+- Env: no_proxy support.
+- RequestsCookieJar improvements.
+- Various bug fixes.
+
 0.12.1 (2012-05-08)
 +++++++++++++++++++
 
-- New ``Response.json`` property
-- Ability to add string file uploads
-- Fix out-of-range issue with iter_lines
-- Fix iter_content default size
-- Fix POST redirects containing files
+- New ``Response.json`` property.
+- Ability to add string file uploads.
+- Fix out-of-range issue with iter_lines.
+- Fix iter_content default size.
+- Fix POST redirects containing files.
 
 0.12.0 (2012-05-02)
 +++++++++++++++++++
@@ -20,7 +76,7 @@ History
 - Speed fix for non-iterated content chunks.
 - Move ``pre_request`` to a more usable place.
 - New ``pre_send`` hook.
-- Lazily encode data, params, files
+- Lazily encode data, params, files.
 - Load system Certificate Bundle if ``certify`` isn't available.
 - Cleanups, fixes.
 
@@ -28,9 +84,9 @@ History
 +++++++++++++++++++
 
 - Attempt to use the OS's certificate bundle if ``certifi`` isn't available.
-- Infinite digest auth redirect fix
-- Multi-part file upload improvements
-- Fix decoding of invalid %encodings in URLs
+- Infinite digest auth redirect fix.
+- Multi-part file upload improvements.
+- Fix decoding of invalid %encodings in URLs.
 - If there is no content in a response don't throw an error the second time that content is attempted to be read.
 - Upload data on redirects.
 

@@ -7,7 +7,6 @@ requests.models
 This module contains the primary objects that power Requests.
 """
 
-import json
 import os
 from datetime import datetime
 
@@ -17,8 +16,8 @@ from .status_codes import codes
 
 from .auth import HTTPBasicAuth, HTTPProxyAuth
 from .cookies import cookiejar_from_dict, extract_cookies_to_jar, get_cookie_header
-from .packages.urllib3.response import HTTPResponse
 from .packages.urllib3.exceptions import MaxRetryError, LocationParseError
+from .packages.urllib3.exceptions import TimeoutError
 from .packages.urllib3.exceptions import SSLError as _SSLError
 from .packages.urllib3.exceptions import HTTPError as _HTTPError
 from .packages.urllib3 import connectionpool, poolmanager
@@ -33,15 +32,7 @@ from .utils import (
     DEFAULT_CA_BUNDLE_PATH)
 from .compat import (
     cookielib, urlparse, urlunparse, urljoin, urlsplit, urlencode, str, bytes,
-    StringIO, is_py2)
-
-# Import chardet if it is available.
-try:
-    import chardet
-    # hush pyflakes
-    chardet
-except ImportError:
-    chardet = None
+    StringIO, is_py2, chardet, json, builtin_str)
 
 REDIRECT_STATI = (codes.moved, codes.found, codes.other, codes.temporary_moved)
 CONTENT_CHUNK_SIZE = 10 * 1024
@@ -66,7 +57,7 @@ class Request(object):
         proxies=None,
         hooks=None,
         config=None,
-        prefetch=False,
+        prefetch=True,
         _poolmanager=None,
         verify=None,
         session=None,
@@ -91,7 +82,7 @@ class Request(object):
         #: HTTP Method to use.
         self.method = method
 
-        #: Dictionary or byte of request body data to attach to the
+        #: Dictionary, bytes or file stream of request body data to attach to the
         #: :class:`Request <Request>`.
         self.data = None
 
@@ -197,11 +188,16 @@ class Request(object):
                 # Set encoding.
                 response.encoding = get_encoding_from_headers(response.headers)
 
-                # Add new cookies from the server.
-                extract_cookies_to_jar(self.cookies, self, resp)
+                # Add new cookies from the server. Don't if configured not to
+                if self.config.get('store_cookies'):
+                    extract_cookies_to_jar(self.cookies, self, resp)
 
                 # Save cookies in Response.
                 response.cookies = self.cookies
+
+                # Save cookies in Session.
+                for cookie in self.cookies:
+                    self.session.cookies.set_cookie(cookie)
 
                 # No exceptions were harmed in the making of this request.
                 response.error = getattr(resp, 'error', None)
@@ -319,6 +315,8 @@ class Request(object):
             return data
         if isinstance(data, str):
             return data
+        elif hasattr(data, 'read'):
+            return data
         elif hasattr(data, '__iter__'):
             try:
                 dict(data)
@@ -357,6 +355,13 @@ class Request(object):
                 fp = StringIO(fp)
             fields.update({k: (fn, fp.read())})
 
+        for field in fields:
+            if isinstance(fields[field], float):
+                fields[field] = str(fields[field])
+            if isinstance(fields[field], list):
+                newvalue = ', '.join(fields[field])
+                fields[field] = newvalue
+                
         (body, content_type) = encode_multipart_formdata(fields)
 
         return (body, content_type)
@@ -398,14 +403,14 @@ class Request(object):
             if isinstance(fragment, str):
                 fragment = fragment.encode('utf-8')
 
-        url = (urlunparse([scheme, netloc, path, params, query, fragment]))
-
         enc_params = self._encode_params(self.params)
         if enc_params:
-            if urlparse(url).query:
-                url = '%s&%s' % (url, enc_params)
+            if query:
+                query = '%s&%s' % (query, enc_params)
             else:
-                url = '%s?%s' % (url, enc_params)
+                query = enc_params
+
+        url = (urlunparse([scheme, netloc, path, params, query, fragment]))
 
         if self.config.get('encode_uri', True):
             url = requote_uri(url)
@@ -453,8 +458,8 @@ class Request(object):
         except ValueError:
             return False
 
-    def send(self, anyway=False, prefetch=False):
-        """Sends the request. Returns True of successful, False if not.
+    def send(self, anyway=False, prefetch=True):
+        """Sends the request. Returns True if successful, False if not.
         If there was an HTTPError during transmission,
         self.response.status_code will contain the HTTPError code.
 
@@ -481,6 +486,22 @@ class Request(object):
         body = None
         content_type = None
 
+        # Multi-part file uploads.
+        if self.files:
+            (body, content_type) = self._encode_files(self.files)
+        else:
+            if self.data:
+
+                body = self._encode_params(self.data)
+                if isinstance(self.data, str) or isinstance(self.data, builtin_str) or hasattr(self.data, 'read'):
+                    content_type = None
+                else:
+                    content_type = 'application/x-www-form-urlencoded'
+
+        # Add content-type if it wasn't explicitly provided.
+        if (content_type) and (not 'content-type' in self.headers):
+            self.headers['Content-Type'] = content_type
+
         # Use .netrc auth if none was provided.
         if not self.auth and self.config.get('trust_env'):
             self.auth = get_netrc_auth(url)
@@ -496,26 +517,11 @@ class Request(object):
             # Update self to reflect the auth changes.
             self.__dict__.update(r.__dict__)
 
-        # Multi-part file uploads.
-        if self.files:
-            (body, content_type) = self._encode_files(self.files)
-        else:
-            if self.data:
-
-                body = self._encode_params(self.data)
-                if isinstance(self.data, str):
-                    content_type = None
-                else:
-                    content_type = 'application/x-www-form-urlencoded'
-
-        # Add content-type if it wasn't explicitly provided.
-        if (content_type) and (not 'content-type' in self.headers):
-            self.headers['Content-Type'] = content_type
-
         _p = urlparse(url)
+        no_proxy = filter(lambda x:x.strip(), self.proxies.get('no', '').split(','))
         proxy = self.proxies.get(_p.scheme)
 
-        if proxy:
+        if proxy and not any(map(_p.netloc.endswith, no_proxy)):
             conn = poolmanager.proxy_from_url(proxy)
             _proxy = urlparse(proxy)
             if '@' in _proxy.netloc:
@@ -562,7 +568,7 @@ class Request(object):
             conn.cert_reqs = 'CERT_NONE'
             conn.ca_certs = None
 
-        if self.cert and self.verify:
+        if self.cert:
             if len(self.cert) == 2:
                 conn.cert_file = self.cert[0]
                 conn.key_file = self.cert[1]
@@ -581,53 +587,36 @@ class Request(object):
             r = dispatch_hook('pre_send', self.hooks, self)
             self.__dict__.update(r.__dict__)
 
+            # catch urllib3 exceptions and throw Requests exceptions
             try:
-                # The inner try .. except re-raises certain exceptions as
-                # internal exception types; the outer suppresses exceptions
-                # when safe mode is set.
-                try:
-                    # Send the request.
-                    r = conn.urlopen(
-                        method=self.method,
-                        url=self.path_url,
-                        body=body,
-                        headers=self.headers,
-                        redirect=False,
-                        assert_same_host=False,
-                        preload_content=False,
-                        decode_content=False,
-                        retries=self.config.get('max_retries', 0),
-                        timeout=self.timeout,
-                    )
-                    self.sent = True
+                # Send the request.
+                r = conn.urlopen(
+                    method=self.method,
+                    url=self.path_url,
+                    body=body,
+                    headers=self.headers,
+                    redirect=False,
+                    assert_same_host=False,
+                    preload_content=False,
+                    decode_content=False,
+                    retries=self.config.get('max_retries', 0),
+                    timeout=self.timeout,
+                )
+                self.sent = True
 
-                except MaxRetryError as e:
-                    raise ConnectionError(e)
+            except MaxRetryError as e:
+                raise ConnectionError(e)
 
-                except (_SSLError, _HTTPError) as e:
-                    if self.verify and isinstance(e, _SSLError):
-                        raise SSLError(e)
-
+            except (_SSLError, _HTTPError) as e:
+                if isinstance(e, _SSLError):
+                    raise SSLError(e)
+                elif isinstance(e, TimeoutError):
+                    raise Timeout(e)
+                else:
                     raise Timeout('Request timed out.')
 
-            except RequestException as e:
-                if self.config.get('safe_mode', False):
-                    # In safe mode, catch the exception and attach it to
-                    # a blank urllib3.HTTPResponse object.
-                    r = HTTPResponse()
-                    r.error = e
-                else:
-                    raise
-
             # build_response can throw TooManyRedirects
-            try:
-                self._build_response(r)
-            except RequestException as e:
-                if self.config.get('safe_mode', False):
-                    # In safe mode, catch the exception
-                    self.response.error = e
-                else:
-                    raise
+            self._build_response(r)
 
             # Response manipulation hook.
             self.response = dispatch_hook('response', self.hooks, self.response)
@@ -676,12 +665,12 @@ class Response(object):
         #: Resulting :class:`HTTPError` of request, if one occurred.
         self.error = None
 
-        #: Encoding to decode with when accessing r.content.
+        #: Encoding to decode with when accessing r.text.
         self.encoding = None
 
         #: A list of :class:`Response <Response>` objects from
         #: the history of the Request. Any redirect responses will end
-        #: up here.
+        #: up here. The list is sorted from the oldest to the most recent request.
         self.history = []
 
         #: The :class:`Request <Request>` that created the Response.
@@ -785,6 +774,8 @@ class Response(object):
                 self._content = None
 
         self._content_consumed = True
+        # don't need to release the connection; that's been handled by urllib3
+        # since we exhausted the data.
         return self._content
 
     @property
@@ -798,6 +789,9 @@ class Response(object):
         # Try charset from content-type
         content = None
         encoding = self.encoding
+
+        if not self.content:
+            return str('')
 
         # Fallback to auto-detected encoding.
         if self.encoding is None:
@@ -824,23 +818,28 @@ class Response(object):
         except ValueError:
             return None
 
+    @property
+    def reason(self):
+        """The HTTP Reason for the response."""
+        return self.raw.reason
+
     def raise_for_status(self, allow_redirects=True):
         """Raises stored :class:`HTTPError` or :class:`URLError`, if one occurred."""
 
         if self.error:
             raise self.error
 
-        if (self.status_code >= 300) and (self.status_code < 400) and not allow_redirects:
-            http_error = HTTPError('%s Redirection' % self.status_code)
-            http_error.response = self
-            raise http_error
+        http_error_msg = ''
+        if 300 <= self.status_code < 400 and not allow_redirects:
+            http_error_msg = '%s Redirection: %s' % (self.status_code, self.reason)
 
-        elif (self.status_code >= 400) and (self.status_code < 500):
-            http_error = HTTPError('%s Client Error' % self.status_code)
-            http_error.response = self
-            raise http_error
+        elif 400 <= self.status_code < 500:
+            http_error_msg = '%s Client Error: %s' % (self.status_code, self.reason)
 
-        elif (self.status_code >= 500) and (self.status_code < 600):
-            http_error = HTTPError('%s Server Error' % self.status_code)
+        elif 500 <= self.status_code < 600:
+            http_error_msg = '%s Server Error: %s' % (self.status_code, self.reason)
+
+        if http_error_msg:
+            http_error = HTTPError(http_error_msg)
             http_error.response = self
             raise http_error
