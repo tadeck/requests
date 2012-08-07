@@ -18,15 +18,19 @@ Things shouldn’t be this way. Not in Python.
 
 ::
 
-    >>> r = requests.get('https://api.github.com', auth=('user', 'pass'))
+    >>> r = requests.get('https://api.github.com/user', auth=('user', 'pass'))
     >>> r.status_code
-    204
+    200
     >>> r.headers['content-type']
-    'application/json'
+    'application/json; charset=utf8'
+    >>> r.encoding
+    'utf-8'
     >>> r.text
-    ...
+    u'{"type":"User"...'
+    >>> r.json
+    {u'private_gists': 419, u'total_private_repos': 77, ...}
 
-See `the same code, without Requests <https://gist.github.com/973705>`_.
+See `similar code, without Requests <https://gist.github.com/973705>`_.
 
 Requests takes all of the work out of Python HTTP/1.1 — making your integration with web services seamless. There's no need to manually add query strings to your URLs, or to form-encode your POST data. Keep-alive and HTTP connection pooling are 100%  automatic, powered by `urllib3 <https://github.com/shazow/urllib3>`_, which is embedded within Requests.
 
@@ -34,7 +38,7 @@ Requests takes all of the work out of Python HTTP/1.1 — making your integrati
 Testimonials
 ------------
 
-`Heroku <http://heroku.com>`_, `PayPal <https://www.paypal.com/>`_,
+`Kippt <http://kippt.com>`_, `Heroku <http://heroku.com>`_, `PayPal <https://www.paypal.com/>`_,
 `Transifex <https://www.transifex.net/>`_,
 `Native Instruments <http://www.native-instruments.com/>`_, `The Washington Post <http://www.washingtonpost.com/>`_,
 `Twitter, Inc <http://twitter.com>`_,

@@ -24,6 +24,7 @@ class CookieTests(TestBaseMixin, unittest.TestCase):
 
         # test deprecated dictionary interface
         self.assertEqual(r.cookies['myname'], 'myvalue')
+        self.assertEqual(r.cookies.get('myname'), 'myvalue')
         # test CookieJar interface
         jar = r.cookies
         self.assertEqual(len(jar), 1)
@@ -105,23 +106,57 @@ class CookieTests(TestBaseMixin, unittest.TestCase):
     def test_disabled_cookie_persistence(self):
         """Test that cookies are not persisted when configured accordingly."""
 
+        config = {'store_cookies' : False}
+
         # Check the case when no cookie is passed as part of the request and the one in response is ignored
-        cookies = requests.get(httpbin('cookies', 'set', 'key', 'value'), store_cookies = False).cookies
-        self.assertEqual(cookies.get("key"), None)
+        cookies = requests.get(httpbin('cookies', 'set', 'key', 'value'), config = config).cookies
+        self.assertTrue(cookies.get("key") is None)
 
         # Test that the cookies passed while making the request still gets used and is available in response object.
         # only the ones received from server is not saved
-        cookies_2 = requests.get(httpbin('cookies', 'set', 'key', 'value'), store_cookies = False,\
+        cookies_2 = requests.get(httpbin('cookies', 'set', 'key', 'value'), config = config,\
                                                 cookies = {"key_2" : "value_2"}).cookies
         self.assertEqual(len(cookies_2), 1)
         self.assertEqual(cookies_2.get("key_2"), "value_2")
 
         # Use the session and make sure that the received cookie is not used in subsequent calls
         s = requests.session()
-        s.get(httpbin('cookies', 'set', 'key', 'value'), store_cookies = False)
+        s.get(httpbin('cookies', 'set', 'key', 'value'), config = config)
         r = s.get(httpbin('cookies'))
         self.assertEqual(json.loads(r.text)['cookies'], {})
 
+    def test_jar_utility_functions(self):
+        """Test utility functions such as list_domains, list_paths, multiple_domains."""
+        r = requests.get("http://github.com")
+        c = r.cookies
+        # github should send us cookies
+        self.assertTrue(len(c) >= 1)
+        self.assertEqual(len(c), len(r.cookies.keys()))
+        self.assertEqual(len(c), len(r.cookies.values()))
+        self.assertEqual(len(c), len(r.cookies.items()))
+        
+        # domain and path utility functions
+        domain = r.cookies.list_domains()[0]
+        path = r.cookies.list_paths()[0]
+        self.assertEqual(dict(r.cookies), r.cookies.get_dict(domain=domain, path=path))
+        self.assertEqual(len(r.cookies.list_domains()), 1)
+        self.assertEqual(len(r.cookies.list_paths()), 1)
+        self.assertFalse(r.cookies.multiple_domains())
+
+    def test_convert_jar_to_dict(self):
+        """Test that keys, values, and items are defined and that we can convert
+        cookie jars to plain old Python dicts."""
+        r = requests.get(httpbin('cookies', 'set', 'myname', 'myvalue'))
+
+        # test keys, values, and items
+        self.assertEqual(r.cookies.keys(), ['myname'])
+        self.assertEqual(r.cookies.values(), ['myvalue'])
+        self.assertEqual(r.cookies.items(), [('myname','myvalue')])
+        
+        # test if we can convert jar to dict
+        dictOfCookies = dict(r.cookies)
+        self.assertEqual(dictOfCookies, {'myname':'myvalue'})
+        self.assertEqual(dictOfCookies, r.cookies.get_dict())
 
 class LWPCookieJarTest(TestBaseMixin, unittest.TestCase):
     """Check store/load of cookies to FileCookieJar's, specifically LWPCookieJar's."""

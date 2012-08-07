@@ -72,6 +72,10 @@ is_osx = ('darwin' in str(sys.platform).lower())
 is_hpux = ('hpux' in str(sys.platform).lower())   # Complete guess.
 is_solaris = ('solar==' in str(sys.platform).lower())   # Complete guess.
 
+try:
+    import simplejson as json
+except ImportError:
+    import json
 
 # ---------
 # Specifics
@@ -85,10 +89,13 @@ if is_py2:
     import cookielib
     from Cookie import Morsel
     from StringIO import StringIO
+    from .packages import chardet
 
+    builtin_str = str
     bytes = str
     str = unicode
     basestring = basestring
+    numeric_types = (int, long, float)
 
 
 
@@ -98,8 +105,11 @@ elif is_py3:
     from http import cookiejar as cookielib
     from http.cookies import Morsel
     from io import StringIO
+    from .packages import chardet2 as chardet
 
+    builtin_str = str
     str = str
     bytes = bytes
     basestring = (str,bytes)
+    numeric_types = (int, float)
 

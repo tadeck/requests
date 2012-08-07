@@ -102,3 +102,11 @@ Patches and Suggestions
 - Roman Haritonov <@reclosedev>
 - Josh Imhoff <joshimhoff13@gmail.com>
 - Arup Malakar <amalakar@gmail.com>
+- Danilo Bargen (gwrtheyrn)
+- Torsten Landschoff
+- Michael Holler (apotheos)
+- Timnit Gebru
+- Sarah Gonzalez
+- Victoria Mo
+- Leila Muhtasib
+- Matthias Rahlf <matthias@webding.de>

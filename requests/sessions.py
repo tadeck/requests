@@ -60,14 +60,13 @@ class Session(object):
     def __init__(self,
         headers=None,
         cookies=None,
-        store_cookies=True,
         auth=None,
         timeout=None,
         proxies=None,
         hooks=None,
         params=None,
         config=None,
-        prefetch=False,
+        prefetch=True,
         verify=True,
         cert=None):
 
@@ -81,7 +80,6 @@ class Session(object):
         self.prefetch = prefetch
         self.verify = verify
         self.cert = cert
-        self.store_cookies = store_cookies
 
         for (k, v) in list(defaults.items()):
             self.config.setdefault(k, deepcopy(v))
@@ -107,14 +105,21 @@ class Session(object):
         return self
 
     def __exit__(self, *args):
-        pass
+        self.close()
+
+    def close(self):
+        """Dispose of any internal state.
+
+        Currently, this just closes the PoolManager, which closes pooled
+        connections.
+        """
+        self.poolmanager.clear()
 
     def request(self, method, url,
         params=None,
         data=None,
         headers=None,
         cookies=None,
-        store_cookies=True,
         files=None,
         auth=None,
         timeout=None,
@@ -123,7 +128,7 @@ class Session(object):
         hooks=None,
         return_response=True,
         config=None,
-        prefetch=False,
+        prefetch=None,
         verify=None,
         cert=None):
 
@@ -136,15 +141,14 @@ class Session(object):
         :param data: (optional) Dictionary or bytes to send in the body of the :class:`Request`.
         :param headers: (optional) Dictionary of HTTP Headers to send with the :class:`Request`.
         :param cookies: (optional) Dict or CookieJar object to send with the :class:`Request`.
-        :param store_cookies: (optional) if ``False``, the received cookies as part of the HTTP response would be ignored.
         :param files: (optional) Dictionary of 'filename': file-like-objects for multipart encoding upload.
         :param auth: (optional) Auth tuple or callable to enable Basic/Digest/Custom HTTP Auth.
         :param timeout: (optional) Float describing the timeout of the request.
         :param allow_redirects: (optional) Boolean. Set to True by default.
         :param proxies: (optional) Dictionary mapping protocol to the URL of the proxy.
         :param return_response: (optional) If False, an un-sent Request object will returned.
-        :param config: (optional) A configuration dictionary.
-        :param prefetch: (optional) if ``True``, the response content will be immediately downloaded.
+        :param config: (optional) A configuration dictionary. See ``request.defaults`` for allowed keys and their default values.
+        :param prefetch: (optional) whether to immediately download the response content. Defaults to ``True``.
         :param verify: (optional) if ``True``, the SSL cert will be verified. A CA_BUNDLE path can also be provided.
         :param cert: (optional) if String, path to ssl client cert file (.pem). If Tuple, ('cert', 'key') pair.
         """
@@ -157,7 +161,7 @@ class Session(object):
         headers = {} if headers is None else headers
         params = {} if params is None else params
         hooks = {} if hooks is None else hooks
-        prefetch = self.prefetch or prefetch
+        prefetch = prefetch if prefetch is not None else self.prefetch
 
         # use session's hooks as defaults
         for key, cb in list(self.hooks.items()):
@@ -175,7 +179,6 @@ class Session(object):
             params=params,
             headers=headers,
             cookies=cookies,
-            store_cookies=store_cookies,
             files=files,
             auth=auth,
             hooks=hooks,
